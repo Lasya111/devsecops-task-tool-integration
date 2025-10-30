@@ -134,7 +134,7 @@ pipeline {
                     ]]) {
  
                     sh '''
-                    //docker rm -f py-app || true
+                    docker rm -f py-app || true
                     
                     docker run -d -p 8005:5000 -e API_KEY=$APP1 --name py-app $DOCKERHUB_USER/$IMAGE_NAME:latest
                     '''
