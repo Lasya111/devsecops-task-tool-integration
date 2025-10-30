@@ -142,6 +142,7 @@ pipeline {
                 }
             }
         }
+
     stage('OWASP ZAP Scan') {
     steps {
         sh '''#!/bin/bash
