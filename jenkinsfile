@@ -1,32 +1,31 @@
 pipeline {
-    agent { label 'lasya-ubuntu-a' }
-
+    agent {
+        label 'lasya-ubuntu-a'
+    }
     triggers {
-        pollSCM('H/3 * * * *') // Poll every 3 mins (or use webhook)
+        pollSCM('H/3 * * * *') // checks every 3 mins, or
+        // OR use GitHub webhook instead (recommended)
     }
 
     environment {
-        DOCKERHUB_USER = 'lasya'
+        DOCKERHUB_USER = 'vishwacloudlab'
         IMAGE_NAME = 'jenkins-docker-lab'
         SONARQUBE = 'SonarCloud'
         SONAR_TOKEN = credentials('sonarcloud-token-lasya')
+
     }
-
     stages {
-
-        stage('Clean Workspace') {
+        stage('Cleanup') {
             steps {
                 cleanWs()
             }
         }
-
-        stage('Checkout SCM') {
+        stage('Checkout') {
             steps {
                 checkout scm
             }
         }
-
-        stage('GitLeaks Scan') {
+         stage('S3 - GitLeaks Scan') {
             steps {
                 sh '''#!/bin/bash
                     set -eux
@@ -51,21 +50,23 @@ pipeline {
                 '''
             }
         }
-
+        
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv(credentialsId: 'sonarcloud-token-lasya', installationName: 'lasya-sq') {
                     sh '''#!/bin/bash
                         set -eux
+                        echo "=== SonarQube installation ==="
                         export SONAR_SCANNER_VERSION=7.2.0.5079
                         export SONAR_SCANNER_HOME=$HOME/.sonar/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64
                         curl --create-dirs -sSLo $HOME/.sonar/sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SONAR_SCANNER_VERSION-linux-x64.zip
                         unzip -o $HOME/.sonar/sonar-scanner.zip -d $HOME/.sonar/
                         export PATH=$SONAR_SCANNER_HOME/bin:$PATH
 
+                        echo "=== Running SonarQube Scanner ==="
                         sonar-scanner \
-                        -Dsonar.organization="arathipm" \
-                        -Dsonar.projectKey="ArathiPM_DevSecOps-Integration" \
+                        -Dsonar.organization="lasya111" \
+                        -Dsonar.projectKey="Lasya111_devsecops-task-tool-integration" \
                         -Dsonar.host.url=https://sonarcloud.io \
                         -Dsonar.sources=. \
                         -Dsonar.python.coverage.reportPaths=coverage.xml \
@@ -73,21 +74,20 @@ pipeline {
                         -Dsonar.cpp.file.suffixes=- \
                         -Dsonar.objc.file.suffixes=- \
                         -Dsonar.login=$SONAR_TOKEN \
-                        -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/tests/**
-                    '''
+                        -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/tests/** \
+                        '''
                 }
             }
         }
-
         stage('Quality Gate') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
+                timeout(time: 2, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
 
-        stage('Docker Build for Python App') {
+        stage('S6 - Docker Build for Python App') {
             steps {
                 sh '''#!/bin/bash
                     set -eux
@@ -108,50 +108,31 @@ pipeline {
                 '''
             }
         }
-
-
-        stage('Trivy Image Scan') {
+        
+        stage('Scan Docker Image with Trivy') {
             steps {
-                sh '''#!/bin/bash
-                    set -eux
-                    if ! command -v trivy &> /dev/null; then
-                        echo "Installing Trivy..."
-                        sudo apt-get update -y
-                        sudo apt-get install -y wget apt-transport-https gnupg lsb-release
-                        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-                        echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
-                        sudo apt-get update -y
-                        sudo apt-get install -y trivy
-                    fi
-
-                    echo "Running Trivy scan..."
-                    trivy image --exit-code 0 --severity HIGH,CRITICAL $DOCKERHUB_USER/$IMAGE_NAME:latest
+                // Scan and save report
+                sh '''
+                  mkdir -p trivy-reports
+                  trivy image --no-progress --exit-code 0 --format table -o trivy-reports/report.txt $DOCKERHUB_USER/$IMAGE_NAME
+                  cat trivy-reports/report.txt
                 '''
             }
         }
-
-        stage('Deploy App Locally') {
-            when {
-                expression { currentBuild.currentResult == 'SUCCESS' }
-            }
+ 
+        stage('Archive Trivy Report') {
             steps {
-                sh '''#!/bin/bash
-                    set -eux
-                    echo "Deploying application locally..."
-                    docker ps -q --filter "publish=8005" | xargs -r docker rm -f || true
-                    docker run -d -p 8005:5000 --name python_app $DOCKERHUB_USER/$IMAGE_NAME:latest
-                    echo "✅ Application deployed and running locally on port 8005"
-                '''
+                archiveArtifacts artifacts: 'trivy-reports/report.txt', fingerprint: true
             }
         }
     }
 
     post {
         success {
-            echo '✅ Pipeline completed and deployed successfully!'
+            echo 'Pipeline completed successfully!'
         }
         failure {
-            echo '❌ Pipeline failed.'
+            echo 'Pipeline failed.'
         }
     }
 }
