@@ -54,7 +54,7 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv(credentialsId: 'arathi-sonar-token', installationName: 'arathi-sq') {
+                withSonarQubeEnv(credentialsId: 'sonarcloud-token-lasya', installationName: 'lasya-sq') {
                     sh '''#!/bin/bash
                         set -eux
                         export SONAR_SCANNER_VERSION=7.2.0.5079
