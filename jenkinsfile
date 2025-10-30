@@ -2,7 +2,10 @@ pipeline {
     agent {
         label 'lasya-security-agent'
     }
-
+    triggers {
+        pollSCM('H/3 * * * *') // checks every 3 mins, or
+        // OR use GitHub webhook instead (recommended)
+    }
 
 
     environment {
