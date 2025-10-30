@@ -1,79 +1,180 @@
 pipeline {
-    agent {
-        label 'lasya-security-agent'
-    }
-
-    environment {
-        VAULT_ADDR = 'http://34.228.140.38:8400/'
-    }
-
-    stages {
-        stage('Cleanup') {
-            steps {
-                cleanWs()
-            }
-        }
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-        stage('GitLeaks Scan') {
-            steps {
-                sh '''#!/bin/bash
-                    set -eux
-                    # Install gitleaks if not present
-                    if ! command -v gitleaks &> /dev/null; then
-                        echo "Installing Gitleaks..."
-                        wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
-                        tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
-                        chmod +x gitleaks
-                        sudo mv gitleaks /usr/local/bin/
-                    fi
-                    # Run gitleaks detect even if from non commited codes
+    agent {
+        label 'lasya-security-agent'
+    }
 
 
-                    echo "🔍 Running Gitleaks scan..."
-                    set +e  # temporarily disable fail-fast
-                    gitleaks detect --source python_app --no-git --verbose --report-path gitleaks-report.json 
-                    result=$?  # capture exit status
-                    set -e  # re-enable fail-fast
 
-                if [ "$result" -ne 0 ]; then
-                    echo "❌ Gitleaks found leaks (exit code $result)"
-                    exit 1
-                else
-                    echo "✅ No leaks found."
-                fi
-                '''
-            }
-        }
-        stage('Fetch Secret from Vault') {
-            steps {
-                script {
-                    withVault([vaultSecrets: [
-                        [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']
-                        ]]
-                    ]]) {
+    environment {
+        VAULT_ADDR = 'http://34.228.140.38:8400/'
+        DOCKERHUB_USER = 'lasyacloudlab'
+        IMAGE_NAME = 'jenkins-docker-lab'
+        SONARQUBE = 'SonarCloud'
+        SONAR_TOKEN = credentials('sonarcloud-token-lasya')
+    }
 
-                    sh '''
-                    docker rm -f py-app || true
-                    docker rmi -f flask-vault-app:latest || true
-                    docker build -t flask-vault-app:latest .
-                    docker run -d -p 8005:5000 -e API_KEY=$APP1 --name py-app flask-vault-app:latest
-                    '''
-                    }
-                }
-            }
-        }
-    }
 
-    post {
-        success {
-            echo 'Pipeline completed successfully!'
-        }
-        failure {
-            echo 'Pipeline failed.'
-        }
-    }
+
+    stages {
+        stage('Cleanup') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('GitLeaks Scan') {
+            steps {
+                sh '''#!/bin/bash
+                    set -eux
+                    # Install gitleaks if not present
+                    if ! command -v gitleaks &> /dev/null; then
+                        echo "Installing Gitleaks..."
+                        wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
+                        tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
+                        chmod +x gitleaks
+                        sudo mv gitleaks /usr/local/bin/
+                    fi
+                    # Run gitleaks detect even if from non commited codes
+
+
+
+
+
+                    echo "🔍 Running Gitleaks scan..."
+                    set +e  # temporarily disable fail-fast
+                    gitleaks detect --source python_app --no-git --verbose --report-path gitleaks-report.json 
+                    result=$?  # capture exit status
+                    set -e  # re-enable fail-fast
+
+
+
+                if [ "$result" -ne 0 ]; then
+                    echo "❌ Gitleaks found leaks (exit code $result)"
+                    exit 1
+                else
+                    echo "✅ No leaks found."
+                fi
+                '''
+            }
+        }
+        stage('Fetch Secret from Vault') {
+            steps {
+                script {
+                    withVault([vaultSecrets: [
+                        [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']
+                        ]]
+                    ]]) {
+
+
+
+                    sh '''
+                    docker rm -f py-app || true
+                    docker rmi -f flask-vault-app:latest || true
+                    docker build -t flask-vault-app:latest .
+                    docker run -d -p 8005:5000 -e API_KEY=$APP1 --name py-app flask-vault-app:latest
+                    '''
+                    }
+                }
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv(credentialsId: 'sonarcloud-token-lasya', installationName: 'lasya-sq') {
+                    sh '''#!/bin/bash
+                        set -eux
+                        echo "=== SonarQube installation ==="
+                        export SONAR_SCANNER_VERSION=7.2.0.5079
+                        export SONAR_SCANNER_HOME=$HOME/.sonar/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64
+                        curl --create-dirs -sSLo $HOME/.sonar/sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SONAR_SCANNER_VE…
+                        unzip -o $HOME/.sonar/sonar-scanner.zip -d $HOME/.sonar/
+                        export PATH=$SONAR_SCANNER_HOME/bin:$PATH
+
+
+
+                        echo "=== Running SonarQube Scanner ==="
+                        sonar-scanner \
+                        -Dsonar.organization="lasya111" \
+                        -Dsonar.projectKey="Lasya111_devsecops1" \
+                        -Dsonar.host.url=https://sonarcloud.io \
+                        -Dsonar.sources=. \
+                        -Dsonar.python.coverage.reportPaths=coverage.xml \
+                        -Dsonar.c.file.suffixes=- \
+                        -Dsonar.cpp.file.suffixes=- \
+                        -Dsonar.objc.file.suffixes=- \
+                        -Dsonar.login=$SONAR_TOKEN \
+                        -Dsonar.exclusions=**/venv/**,**/__pycache__/**,**/tests/** \
+                        '''
+                }
+            }
+        }
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        stage('Python Setup & Test with Coverage') {
+            steps {
+                dir('python_app') {
+                    sh '''#!/bin/bash
+                        set -euxo pipefail
+                        rm -rf venv
+                        python3 -m venv venv
+                        ./venv/bin/pip install --upgrade pip
+                        ./venv/bin/pip install -r requirements.txt
+                        ./venv/bin/python -m pytest tests/ --maxfail=1 --disable-warnings -q \
+                            --cov=. --cov-report=xml:../coverage.xml
+                    '''               
+                }
+            }
+        }
+        stage('Clean up image and container') {
+            steps {
+                script {
+                    // sh 'git clone git@github.com:Vishwanathms/t7.14-py-jenkins.git'
+                    sh 'docker rm  jenkins_app -f || true'
+                    sh 'docker image rmi $DOCKERHUB_USER/$IMAGE_NAME:latest || true'
+                }
+            }  
+        }
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    sh 'docker build -t $DOCKERHUB_USER/$IMAGE_NAME:latest Python-app'
+                }
+            }
+        }
+        stage('Scan Docker Image with Trivy') {
+            steps {
+                // Scan and save report
+                sh '''
+                  mkdir -p trivy-reports
+                  trivy image --no-progress --exit-code 0 --format table -o trivy-reports/report.txt $DOCKERHUB_USER/$IMAGE_NAME
+                  cat trivy-reports/report.txt
+                '''
+            }
+        }
+        stage('Archive Trivy Report') {
+            steps {
+                archiveArtifacts artifacts: 'trivy-reports/report.txt', fingerprint: true
+            }
+        }
+    
+    }
+
+
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed.'
+        }
+    }
 }
